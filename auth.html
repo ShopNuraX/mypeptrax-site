@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex">
+<title>MyPepTraX</title>
+<!--
+  Where Supabase lands people after they open a link in an auth email.
+
+  The app registers mypeptrax:// and can consume the token directly, so the
+  email could redirect straight to the app scheme. It does not, because a
+  scheme link opened anywhere other than an iPhone with the app installed —
+  a desktop browser, a webmail preview, a friend's phone — fails with a
+  browser error and no explanation. This page always loads, then hands off.
+
+  The token arrives in the URL fragment, which is never sent to a server.
+  It is read here only to pass on to the app, and is deliberately not logged,
+  stored, or put in a query string.
+-->
+<style>
+:root{--bg:#f4f6f7;--card:#fff;--ink:#12181c;--muted:#5a6570;--accent:#12a594;
+--danger:#c4433a;--line:#e4e8ea}
+@media(prefers-color-scheme:dark){:root{--bg:#0d1113;--card:#161b1e;--ink:#eef2f3;
+--muted:#98a3ab;--accent:#2ec4b0;--danger:#ef6b62;--line:#262e33}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:17px/1.62 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+-webkit-text-size-adjust:100%}
+.wrap{max-width:720px;margin:0 auto;padding:32px 20px 72px}
+.brand{font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+color:var(--accent);text-decoration:none;display:inline-block;margin-bottom:26px}
+h1{font-size:clamp(26px,5vw,34px);line-height:1.18;margin:0 0 8px;letter-spacing:-.01em}
+h2{font-size:19px;line-height:1.3;margin:34px 0 10px;letter-spacing:-.005em}
+p{margin:0 0 16px;color:var(--muted)}
+p strong{color:var(--ink);font-weight:650}
+.updated{font-size:14px;color:var(--muted);margin:0 0 30px}
+nav{margin:44px 0 0;padding-top:22px;border-top:1px solid var(--line)}
+nav p{font-size:13px;margin:0 0 10px;color:var(--muted)}
+nav a{display:inline-block;margin:0 14px 8px 0;font-size:15px;color:var(--accent);
+text-decoration:none}
+nav a:hover{text-decoration:underline}
+footer{margin-top:38px;font-size:13px;color:var(--muted)}
+
+.card{max-width:440px;margin:0 auto;background:var(--card);border-radius:18px;
+padding:34px 28px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.06),0 10px 30px rgba(0,0,0,.05)}
+.mark{width:58px;height:58px;margin:0 auto 16px;display:block}
+.card h1{font-size:24px;margin:0 0 10px}
+.card p{margin:0 0 18px}
+.btn{display:block;padding:15px 22px;border-radius:11px;background:var(--accent);
+color:#fff;font-weight:600;text-decoration:none;font-size:16px}
+.hint{font-size:13px;margin:16px 0 0}
+.err h1{color:var(--danger)}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <main class="card" id="card">
+    <a class="brand" href="./">MyPepTraX</a>
+    <svg class="mark" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+      <circle cx="32" cy="32" r="30" fill="var(--accent)" opacity=".12" id="halo"/>
+      <path id="tick" d="M20 33.5 28.5 42 45 24" stroke="var(--accent)" stroke-width="5"
+            stroke-linecap="round" stroke-linejoin="round"/>
+      <path id="cross" d="M23 23l18 18M41 23L23 41" stroke="var(--danger)"
+            stroke-width="5" stroke-linecap="round" hidden/>
+    </svg>
+    <h1 id="title">Email confirmed</h1>
+    <p id="message">Your account is active. Open MyPepTraX to sign in.</p>
+    <a class="btn" id="open" href="mypeptrax://auth-callback">Open MyPepTraX</a>
+    <p class="hint" id="hint">If nothing happens, MyPepTraX is not installed on
+    this device — open the link on the phone where you installed it.</p>
+  </main>
+</div>
+<script>
+(function () {
+  var raw = location.hash.replace(/^#/, '');
+  var f = new URLSearchParams(raw);
+  var q = new URLSearchParams(location.search);
+
+  var errCode = f.get('error_code') || q.get('error_code');
+  var errDesc = f.get('error_description') || q.get('error_description');
+  var el = function (id) { return document.getElementById(id); };
+
+  function decode(s) { return s ? decodeURIComponent(s.replace(/\+/g, ' ')) : ''; }
+
+  if (errCode || errDesc) {
+    var expired = /expired|invalid/i.test(errCode + ' ' + errDesc);
+    document.getElementById('card').classList.add('err');
+    // Attribute, not the `hidden` property: these are SVG elements, and
+    // `hidden` is defined on HTMLElement, so assigning to it does nothing
+    // and the success tick would sit on top of the error text.
+    el('tick').setAttribute('hidden', '');
+    el('cross').removeAttribute('hidden');
+    el('halo').setAttribute('fill', 'var(--danger)');
+    var h = expired ? 'This link has expired' : 'Something went wrong';
+    el('title').textContent = h;
+    document.title = h + ' \u2014 MyPepTraX';
+    el('message').textContent = expired
+      ? 'Links in these emails work once and then expire. Open the app and request a new one.'
+      : (decode(errDesc) || 'The link could not be verified.');
+    el('hint').textContent = 'Request a fresh link from the app, then open it on this device.';
+    return;
+  }
+
+  // Carry the fragment through to the app so it can establish the session
+  // without asking the person to type anything again.
+  if (raw) el('open').setAttribute('href', 'mypeptrax://auth-callback#' + raw);
+
+  var copy = {
+    recovery: ['Choose a new password',
+               'Open MyPepTraX to set a new password. This link is what proves it is you, so finish in the app.',
+               'Set a new password'],
+    email_change: ['Email address updated',
+                   'The new address is now on your account. Open MyPepTraX to carry on.',
+                   'Open MyPepTraX'],
+    magiclink: ['You are signed in',
+                'Open MyPepTraX to continue.', 'Open MyPepTraX'],
+    invite: ['Invitation accepted',
+             'Open MyPepTraX to finish setting up your account.', 'Open MyPepTraX']
+  }[f.get('type')];
+
+  if (copy) {
+    el('title').textContent = copy[0];
+    el('message').textContent = copy[1];
+    el('open').textContent = copy[2];
+    document.title = copy[0] + ' \u2014 MyPepTraX';
+  }
+})();
+</script>
+</body>
+</html>
