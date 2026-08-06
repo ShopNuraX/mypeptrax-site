@@ -39,6 +39,7 @@ footer{margin-top:38px;font-size:13px;color:var(--muted)}
   <h2>What is stored</h2>
   <p>Your account is an email address and a password, held by Supabase, our hosting provider. Passwords are hashed by Supabase and are never visible to us or to the app.</p>
   <p>Everything you enter is stored against your account: the compounds and vials you record, injections you log with their date, amount and body site, protocols and reminders you create, body measurements, bloodwork results, journal entries, and any progress photos you add.</p>
+  <p>After confirming your email you are asked once for a name, year of birth, sex and height. Every one of these is optional and the form can be skipped; the app works with all of them blank. Year of birth rather than a full date, because the only thing the app needs to know is that you are over 21. Sex is recorded so bloodwork can be read against the right reference range. None of it is used to calculate a dose — the calculator uses only the vial, the water added, and an amount you enter yourself — and none of it is shown to anyone else, including in the community, where you appear under a handle you choose separately.</p>
   <p>Progress photos are uploaded to private storage. They are not public, not indexed, and not readable without your session.</p>
   <h2>Who can see it</h2>
   <p>Only you. Every table enforces row-level security keyed to your user id, so a request carrying your session can read and write your rows and no others. We do not read your log, and there is no admin screen that displays it.</p>
