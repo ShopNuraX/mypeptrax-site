@@ -103,9 +103,16 @@ color:#fff;font-weight:600;text-decoration:none;font-size:16px}
     return;
   }
 
-  // Carry the fragment through to the app so it can establish the session
+  // Carry everything through to the app so it can establish the session
   // without asking the person to type anything again.
-  if (raw) el('open').setAttribute('href', 'mypeptrax://auth-callback#' + raw);
+  //
+  // Both parts, deliberately. supabase-swift defaults to PKCE, which returns
+  // the grant as ?code=... in the QUERY STRING; the older implicit flow returns
+  // tokens in the FRAGMENT. Forwarding only the fragment opened the app with
+  // nothing to exchange, so the session was never created and the person was
+  // returned to the verify-your-email screen they had just satisfied.
+  var handoff = 'mypeptrax://auth-callback' + (location.search || '') + (raw ? '#' + raw : '');
+  el('open').setAttribute('href', handoff);
 
   var copy = {
     recovery: ['Choose a new password',
@@ -118,7 +125,7 @@ color:#fff;font-weight:600;text-decoration:none;font-size:16px}
                 'Open MyPepTraX to continue.', 'Open MyPepTraX'],
     invite: ['Invitation accepted',
              'Open MyPepTraX to finish setting up your account.', 'Open MyPepTraX']
-  }[f.get('type')];
+  }[f.get('type') || q.get('type')];
 
   if (copy) {
     el('title').textContent = copy[0];
