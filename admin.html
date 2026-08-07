@@ -520,6 +520,36 @@ async function deleteUser(user) {
   // there is nothing to restore from.
   if (!confirm(`Delete ${user.email}? This removes the account and everything in it.`)) return;
   if (!confirm("This cannot be undone. Delete permanently?")) return;
+
+  // Photographs first, and through the Storage API rather than the database.
+  //
+  // Deleting the account only ever removed the `progress_photos` rows; the
+  // image files stayed in the bucket, for every account ever deleted here. It
+  // cannot be fixed server-side — Supabase refuses SQL deletes from
+  // `storage.objects`, because a row there indexes an object and removing it
+  // would strand the file instead of freeing it.
+  //
+  // `admin_photo_paths` returns paths and nothing else: no pose, no date, no
+  // weight, no note, no signed URL. There is deliberately no way to look at
+  // these from this console, only to remove them.
+  const { data: paths, error: pathError } =
+    await db.rpc("admin_photo_paths", { target: user.id });
+  if (pathError) return alert(`Could not list the account's photos: ${pathError.message}`);
+
+  if (paths?.length) {
+    const { error: fileError } = await db.storage
+      .from("progress-photos")
+      .remove(paths.map((p) => p.storage_path));
+    // Stop rather than continue. Deleting the account and keeping the
+    // photographs is the exact failure this replaced.
+    if (fileError) {
+      return alert(
+        `Could not delete this account's ${paths.length} photo(s): ${fileError.message}\n\n` +
+        `The account has NOT been deleted. Nothing has changed.`
+      );
+    }
+  }
+
   const { error } = await db.rpc("admin_delete_user", { target: user.id });
   if (error) alert(error.message);
   await drawUsers($("userSearch")?.value ?? "");
