@@ -132,10 +132,14 @@ const BUG_STATUSES = ["open", "investigating", "fixed", "wontfix"];
 
 const SECTIONS = [
   { id: "dashboard",  label: "Dashboard",   render: renderDashboard },
+  { id: "activity",   label: "Live Activity", render: renderActivity },
+  { id: "users",      label: "Users",       render: renderUsers },
+  { id: "subs",       label: "Subscriptions", render: renderSubs },
   { id: "reliability",label: "Reliability", render: renderReliability },
   { id: "support",    label: "Support",     render: renderSupport },
   { id: "moderation", label: "Moderation",  render: renderModeration },
   { id: "community",  label: "Community",   render: renderCommunity },
+  { id: "emails",     label: "Emails",      render: renderEmails },
   { id: "access",     label: "What this can see", render: renderAccess },
 ];
 
@@ -354,8 +358,11 @@ async function renderAccess() {
   $("sub").textContent = "What this console can and cannot reach, and why.";
   $("body").innerHTML = `
     <div class="panel"><h2>It can read</h2><p class="muted">
-      Bug reports, crash and hang diagnostics, community posts and replies,
-      the moderation queue, and system-wide totals.
+      Account identity and state — email, when somebody signed up and last
+      signed in, whether they confirmed their address, whether they are banned
+      or suspended, and what their app last reported about their subscription.
+      Plus bug reports, crash diagnostics, community content, the moderation
+      queue and system totals.
     </p></div>
     <div class="panel"><h2>It cannot read</h2><p class="muted">
       Anybody's dose log, vials, protocols, measurements, bloodwork, journal or
@@ -364,11 +371,14 @@ async function renderAccess() {
       screen that displays their records, and this console is built so that stays
       true rather than relying on nobody adding one.
     </p></div>
-    <div class="panel"><h2>Why the totals are safe</h2><p class="muted">
-      Counts come from a function that returns a single row of numbers. Granting
-      an admin the ability to read <code>profiles</code> directly would also hand
-      over every date of birth, sex and height, because row-level security cannot
-      withhold a column. No row leaves, so there is nothing to leak.
+    <div class="panel"><h2>How that is possible without the health data</h2><p class="muted">
+      Every query here goes through a function that chooses its own columns.
+      Granting an admin <code>select</code> on <code>profiles</code> would have
+      been simpler and would also have handed over every date of birth, sex and
+      height, because row-level security is row-level and cannot withhold a
+      column. The functions return identity and account state and nothing else,
+      so there is no screen — and no query — that reaches a dose, a vial, a
+      measurement or a photo.
     </p></div>
     <div class="panel"><h2>How access is granted</h2><p class="muted">
       This page is public and its URL is not a secret. The key it carries is the
@@ -376,6 +386,174 @@ async function renderAccess() {
       signing in: every query runs as that user, and a non-admin sees nothing
       because the policies return nothing. There is no service-role key here.
     </p></div>`;
+}
+
+
+let usersCache = [];
+
+async function loadUsers(search) {
+  const { data, error } = await db.rpc("admin_users", { search: search || null });
+  if (error) throw error;
+  usersCache = data ?? [];
+  return usersCache;
+}
+
+async function renderUsers() {
+  $("sub").textContent = "Every account, with what an operator needs to support or remove it. No health data is reachable here.";
+  $("body").innerHTML = `
+    <div class="panel">
+      <input id="userSearch" placeholder="Search by email" style="max-width:320px">
+    </div>
+    <div id="userTable"><p class="muted">Loading…</p></div>`;
+  $("userSearch").oninput = debounce(() => drawUsers($("userSearch").value), 300);
+  await drawUsers("");
+}
+
+function debounce(fn, ms) {
+  let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
+}
+
+async function drawUsers(search) {
+  let rows;
+  try { rows = await loadUsers(search); }
+  catch (e) { return $("userTable").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  if (!rows.length) return $("userTable").innerHTML = `<div class="panel"><p class="muted">No accounts match.</p></div>`;
+
+  $("userTable").innerHTML = `<div class="panel"><table>
+    <tr><th>Email</th><th>Joined</th><th>Last seen</th><th>State</th><th>Plan</th><th>Actions</th></tr>
+    ${rows.map((u) => `<tr>
+      <td>${esc(u.email)}${u.handle ? `<br><span class="muted">@${esc(u.handle)}</span>` : ""}</td>
+      <td class="muted">${esc(shortDate(u.created_at))}</td>
+      <td class="muted">${esc(shortDate(u.last_sign_in_at))}</td>
+      <td>${statePills(u)}</td>
+      <td>${u.subscription_status === "premium"
+            ? '<span class="pill" style="background:#123;color:var(--accent)">premium</span>'
+            : '<span class="pill">free</span>'}</td>
+      <td>
+        <button class="act" id="ban-${u.id}">${u.is_banned ? "Unban" : "Ban"}</button>
+        <button class="act" id="sus-${u.id}" ${u.handle ? "" : "disabled"}>${u.community_suspended ? "Unsuspend" : "Suspend"}</button>
+        <button class="act" id="adm-${u.id}">${u.is_admin ? "Revoke admin" : "Make admin"}</button>
+        <button class="act bad" id="del-${u.id}">Delete</button>
+      </td></tr>`).join("")}
+  </table>
+  <p class="muted" style="margin-top:12px">Plan is what the app last reported from StoreKit. It is a support hint, not the entitlement — the device decides what is unlocked.</p>
+  </div>`;
+
+  for (const u of rows) {
+    $(`ban-${u.id}`).onclick = () => setFlag(u, "is_banned", !u.is_banned);
+    const sus = $(`sus-${u.id}`);
+    if (sus && !sus.disabled) sus.onclick = () => setFlag(u, "community_suspended", !u.community_suspended);
+    $(`adm-${u.id}`).onclick = () => setFlag(u, "is_admin", !u.is_admin);
+    $(`del-${u.id}`).onclick = () => deleteUser(u);
+  }
+}
+
+function statePills(u) {
+  const out = [];
+  if (!u.email_confirmed) out.push('<span class="pill warn">unconfirmed</span>');
+  if (u.is_banned) out.push('<span class="pill bad">banned</span>');
+  if (u.community_suspended) out.push('<span class="pill warn">suspended</span>');
+  if (u.is_admin) out.push('<span class="pill" style="background:#123;color:var(--accent)">admin</span>');
+  if (!u.onboarded) out.push('<span class="pill">setup incomplete</span>');
+  return out.join(" ") || '<span class="muted">—</span>';
+}
+
+const shortDate = (t) => t ? new Date(t).toLocaleDateString() : "never";
+
+async function setFlag(user, flag, value) {
+  const verb = { is_banned: value ? "ban" : "unban",
+                 community_suspended: value ? "suspend" : "unsuspend",
+                 is_admin: value ? "make an administrator" : "revoke administrator from" }[flag];
+  if (!confirm(`${verb.charAt(0).toUpperCase() + verb.slice(1)} ${user.email}?`)) return;
+  const { error } = await db.rpc("admin_set_flag", { target: user.id, flag, value });
+  if (error) alert(error.message);
+  await drawUsers($("userSearch")?.value ?? "");
+  await refreshMetricsOnly();
+}
+
+async function deleteUser(user) {
+  // Twice, because it cascades through every table the account touches and
+  // there is nothing to restore from.
+  if (!confirm(`Delete ${user.email}? This removes the account and everything in it.`)) return;
+  if (!confirm("This cannot be undone. Delete permanently?")) return;
+  const { error } = await db.rpc("admin_delete_user", { target: user.id });
+  if (error) alert(error.message);
+  await drawUsers($("userSearch")?.value ?? "");
+  await refreshMetricsOnly();
+}
+
+async function renderActivity() {
+  $("sub").textContent = "System events, newest first. Deliberately excludes anything somebody recorded about themselves.";
+  const { data, error } = await db.rpc("admin_activity", { limit_rows: 150 });
+  if (error) return $("body").innerHTML = `<p class="err">${esc(error.message)}</p>`;
+  if (!data?.length) return $("body").innerHTML = `<div class="panel"><p class="muted">Nothing yet.</p></div>`;
+  const tone = { crash: "bad", report: "warn", bug: "warn", signup: "", post: "" };
+  $("body").innerHTML = `<div class="panel"><table>
+    <tr><th>When</th><th>Event</th><th>Detail</th></tr>
+    ${data.map((e) => `<tr>
+      <td class="muted" style="white-space:nowrap">${esc(when(e.occurred_at))}</td>
+      <td><span class="pill ${tone[e.kind] ?? ""}">${esc(e.kind)}</span></td>
+      <td>${esc(e.detail ?? "")}</td>
+    </tr>`).join("")}
+  </table>
+  <p class="muted" style="margin-top:12px">No dose, vial, measurement or bloodwork event appears here. A feed of those is a feed of health events, and no operator should be watching one.</p>
+  </div>`;
+}
+
+async function renderSubs() {
+  $("sub").textContent = "What each app last reported from StoreKit.";
+  let rows;
+  try { rows = await loadUsers(null); }
+  catch (e) { return $("body").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  const premium = rows.filter((u) => u.subscription_status === "premium");
+  const free = rows.filter((u) => u.subscription_status === "free");
+  const unknown = rows.filter((u) => !u.subscription_status);
+  $("body").innerHTML = statCards([
+    ["Premium", premium.length, premium.length ? "good" : ""],
+    ["Free", free.length],
+    ["Not yet reported", unknown.length],
+  ]) + `<div class="panel">
+    <h2>Premium accounts</h2>
+    ${premium.length ? `<table><tr><th>Email</th><th>Last reported</th></tr>
+      ${premium.map((u) => `<tr><td>${esc(u.email)}</td><td class="muted">${esc(shortDate(u.created_at))}</td></tr>`).join("")}
+    </table>` : `<p class="muted">Nobody has reported an active subscription yet.</p>`}
+  </div>
+  <div class="panel"><h2>Why this is a hint, not the truth</h2><p class="muted">
+    StoreKit is the authority on entitlement and it lives on the device. This
+    column is whatever the app last managed to write, so an account that has not
+    opened the app since subscribing will read as stale, and one that never
+    reached the network will read as unknown. It answers "is this person
+    subscribed?" in a support thread. It must never be what unlocks a feature —
+    if it were, a network write would decide what the app does.
+    The authoritative record is App Store Connect.
+  </p></div>`;
+}
+
+async function renderEmails() {
+  $("sub").textContent = "Not available from here, and worth explaining rather than faking.";
+  $("body").innerHTML = `
+    <div class="panel"><h2>Sent email</h2><p class="muted">
+      Confirmations, password resets and address changes are sent by Supabase
+      through Resend. Their delivery status — sent, bounced, opened — lives in
+      Resend, and reading it needs a Resend API key. A key with that power in a
+      public web page would be readable by anyone who viewed source, so this
+      console does not carry one and should not.
+    </p>
+    <p><a href="https://resend.com/emails" target="_blank" rel="noopener">Open Resend logs</a>
+       · <a href="https://supabase.com/dashboard/project/kvseispfcfqvvgbdvfxm/logs/auth-logs" target="_blank" rel="noopener">Supabase auth logs</a></p>
+    </div>
+    <div class="panel"><h2>Received email</h2><p class="muted">
+      Nothing in the app receives email. Users reach you through Report a bug,
+      which appears under Support in this console. If you want a real inbox, the
+      honest way is a support address with a shared mailbox — adding one here
+      would mean putting mail credentials in a public page.
+    </p></div>`;
+}
+
+async function refreshMetricsOnly() {
+  const { data, error } = await db.rpc("admin_metrics");
+  metrics = error ? null : (Array.isArray(data) ? data[0] : data);
+  badges();
 }
 
 // -------------------------------------------------------------- start ---
