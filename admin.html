@@ -426,26 +426,70 @@ async function drawUsers(search) {
       <td class="muted">${esc(shortDate(u.created_at))}</td>
       <td class="muted">${esc(shortDate(u.last_sign_in_at))}</td>
       <td>${statePills(u)}</td>
-      <td>${u.subscription_status === "premium"
-            ? '<span class="pill" style="background:#123;color:var(--accent)">premium</span>'
-            : '<span class="pill">free</span>'}</td>
+      <td>${planCell(u)}</td>
       <td>
         <button class="act" id="ban-${u.id}">${u.is_banned ? "Unban" : "Ban"}</button>
         <button class="act" id="sus-${u.id}" ${u.handle ? "" : "disabled"}>${u.community_suspended ? "Unsuspend" : "Suspend"}</button>
+        <button class="act ${u.granted_premium ? "" : "primary"}" id="prem-${u.id}">${u.granted_premium ? "Revoke premium" : "Give premium"}</button>
         <button class="act" id="adm-${u.id}">${u.is_admin ? "Revoke admin" : "Make admin"}</button>
         <button class="act bad" id="del-${u.id}">Delete</button>
       </td></tr>`).join("")}
   </table>
-  <p class="muted" style="margin-top:12px">Plan is what the app last reported from StoreKit. It is a support hint, not the entitlement — the device decides what is unlocked.</p>
+  <p class="muted" style="margin-top:12px">
+    <strong>Granted</strong> is access you gave; it unlocks the app on the next launch and is enforced by the database.
+    <strong>Premium</strong> is what the app last reported from StoreKit — a support hint, not the entitlement, because the device decides what a purchase unlocks.
+  </p>
   </div>`;
 
   for (const u of rows) {
     $(`ban-${u.id}`).onclick = () => setFlag(u, "is_banned", !u.is_banned);
     const sus = $(`sus-${u.id}`);
     if (sus && !sus.disabled) sus.onclick = () => setFlag(u, "community_suspended", !u.community_suspended);
+    $(`prem-${u.id}`).onclick = () => setPremium(u);
     $(`adm-${u.id}`).onclick = () => setFlag(u, "is_admin", !u.is_admin);
     $(`del-${u.id}`).onclick = () => deleteUser(u);
   }
+}
+
+function planCell(u) {
+  // Bought and granted are different facts and the console should not blur
+  // them: one is revenue, the other is a decision somebody made.
+  if (u.granted_premium) {
+    const until = u.granted_until
+      ? `until ${new Date(u.granted_until).toLocaleDateString()}`
+      : "no expiry";
+    return `<span class="pill" style="background:#2a2410;color:var(--warn)">granted</span>
+            <br><span class="muted">${esc(until)}</span>`;
+  }
+  if (u.subscription_status === "premium") {
+    return '<span class="pill" style="background:#123;color:var(--accent)">premium</span>';
+  }
+  return '<span class="pill">free</span>';
+}
+
+async function setPremium(user) {
+  if (user.granted_premium) {
+    if (!confirm(`Revoke granted premium from ${user.email}?`)) return;
+    const { error } = await db.rpc("admin_set_premium", { target: user.id, granted: false, until: null });
+    if (error) alert(error.message);
+    return drawUsers($("userSearch")?.value ?? "");
+  }
+  // An expiry is offered first because an indefinite grant is the one nobody
+  // remembers to take back.
+  const days = prompt(
+    `Give premium to ${user.email}.\n\nFor how many days? Leave blank for no expiry.`, "30");
+  if (days === null) return;
+  let until = null;
+  if (days.trim() !== "") {
+    const n = Number(days);
+    if (!Number.isFinite(n) || n <= 0) return alert("Enter a number of days, or leave it blank.");
+    until = new Date(Date.now() + n * 86400000).toISOString();
+  } else if (!confirm("No expiry — this grant stays until somebody revokes it. Continue?")) {
+    return;
+  }
+  const { error } = await db.rpc("admin_set_premium", { target: user.id, granted: true, until });
+  if (error) alert(error.message);
+  await drawUsers($("userSearch")?.value ?? "");
 }
 
 function statePills(u) {
@@ -505,11 +549,13 @@ async function renderSubs() {
   let rows;
   try { rows = await loadUsers(null); }
   catch (e) { return $("body").innerHTML = `<p class="err">${esc(e.message)}</p>`; }
-  const premium = rows.filter((u) => u.subscription_status === "premium");
-  const free = rows.filter((u) => u.subscription_status === "free");
-  const unknown = rows.filter((u) => !u.subscription_status);
+  const granted = rows.filter((u) => u.granted_premium);
+  const premium = rows.filter((u) => u.subscription_status === "premium" && !u.granted_premium);
+  const free = rows.filter((u) => u.subscription_status === "free" && !u.granted_premium);
+  const unknown = rows.filter((u) => !u.subscription_status && !u.granted_premium);
   $("body").innerHTML = statCards([
-    ["Premium", premium.length, premium.length ? "good" : ""],
+    ["Paying", premium.length, premium.length ? "good" : ""],
+    ["Granted", granted.length, granted.length ? "warn" : ""],
     ["Free", free.length],
     ["Not yet reported", unknown.length],
   ]) + `<div class="panel">
