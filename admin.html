@@ -101,6 +101,17 @@ hr{border:0;border-top:1px solid var(--line);margin:16px 0}
 
     <div class="card">
       <div class="row" style="justify-content:space-between">
+        <strong>Bug reports</strong>
+        <label class="row muted" style="margin:0">
+          <input type="checkbox" id="showClosedBugs" style="width:auto;margin-right:6px">
+          include closed
+        </label>
+      </div>
+      <div id="bugs" style="margin-top:12px"></div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
         <strong>Moderation queue</strong>
         <label class="row muted" style="margin:0">
           <input type="checkbox" id="showResolved" style="width:auto;margin-right:6px">
@@ -111,7 +122,8 @@ hr{border:0;border-top:1px solid var(--line);margin:16px 0}
     </div>
 
     <p class="muted">
-      This console can reach the moderation queue and community content only.
+      This console can reach the moderation queue, bug reports and community
+      content only.
       It cannot read anyone's dose log, vials, photos or bloodwork — those
       row-level security policies are unchanged, and the privacy policy says
       there is no admin view of them.
@@ -186,7 +198,60 @@ async function enterConsole() {
 }
 
 async function refresh() {
-  await Promise.all([loadStats(), loadReports()]);
+  await Promise.all([loadStats(), loadReports(), loadBugs()]);
+}
+
+const BUG_STATUSES = ["open", "investigating", "fixed", "wontfix"];
+
+async function loadBugs() {
+  let q = db.from("bug_reports").select("*").order("created_at", { ascending: false }).limit(200);
+  if (!$("showClosedBugs").checked) q = q.is("resolved_at", null);
+  const { data, error } = await q;
+  if (error) {
+    $("bugs").innerHTML = `<p class="err">${esc(error.message)}</p>`;
+    return;
+  }
+  if (!data.length) {
+    $("bugs").innerHTML = `<p class="muted">No open bug reports.</p>`;
+    return;
+  }
+  $("bugs").innerHTML = data.map(renderBug).join("<hr>");
+  for (const bug of data) {
+    const el = document.getElementById(`bugstatus-${bug.id}`);
+    if (el) el.onchange = () => setBugStatus(bug, el.value);
+  }
+}
+
+function renderBug(b) {
+  const when = new Date(b.created_at).toLocaleString();
+  const options = BUG_STATUSES.map((s) =>
+    `<option value="${s}" ${s === b.status ? "selected" : ""}>${s}</option>`
+  ).join("");
+  return `
+    <div>
+      <div class="row" style="justify-content:space-between">
+        <strong>${esc(b.summary)}</strong>
+        <span class="muted">${esc(when)}</span>
+      </div>
+      ${b.detail ? `<div class="snap">${esc(b.detail)}</div>` : ""}
+      <p class="muted">v${esc(b.app_version)} · iOS ${esc(b.os_version)} · ${esc(b.device_model)}</p>
+      <div class="row">
+        <select id="bugstatus-${b.id}" style="padding:8px;border-radius:8px;background:var(--bg);color:var(--ink);border:1px solid var(--line)">
+          ${options}
+        </select>
+      </div>
+    </div>`;
+}
+
+async function setBugStatus(bug, status) {
+  // Closed states carry a timestamp so the open queue empties; reopening
+  // clears it, or a reopened bug would stay hidden.
+  const closed = status === "fixed" || status === "wontfix";
+  const { error } = await db.from("bug_reports")
+    .update({ status, resolved_at: closed ? new Date().toISOString() : null })
+    .eq("id", bug.id);
+  if (error) alert(`Could not update: ${error.message}`);
+  await loadBugs();
 }
 
 async function loadStats() {
@@ -196,14 +261,17 @@ async function loadStats() {
     const { count, error } = await q;
     return error ? "—" : count;
   };
-  const [posts, comments, open, members] = await Promise.all([
+  const [posts, comments, open, members, bugs, crashes] = await Promise.all([
     counts("community_posts"),
     counts("community_comments"),
     counts("community_reports", (q) => q.is("resolved_at", null)),
     counts("community_profiles"),
+    counts("bug_reports", (q) => q.is("resolved_at", null)),
+    counts("diagnostics"),
   ]);
   $("stats").innerHTML = [
-    ["Open reports", open], ["Posts", posts], ["Replies", comments], ["Handles", members],
+    ["Open bugs", bugs], ["Crashes", crashes], ["Open reports", open],
+    ["Posts", posts], ["Replies", comments], ["Handles", members],
   ].map(([label, value]) =>
     `<div class="stat"><b>${esc(value)}</b><span>${esc(label)}</span></div>`
   ).join("");
@@ -289,6 +357,7 @@ $("signin").onclick = signIn;
 $("password").addEventListener("keydown", (e) => { if (e.key === "Enter") signIn(); });
 $("refresh").onclick = refresh;
 $("showResolved").onchange = loadReports;
+$("showClosedBugs").onchange = loadBugs;
 $("signout").onclick = async () => { await db.auth.signOut(); location.reload(); };
 
 // A stored session means no second sign-in, but it is still checked against
