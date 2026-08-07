@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Control Center — MyPepTraX</title>
+<!--
+  MyPepTraX Control Center.
+
+  SECURITY MODEL, stated plainly because the obvious implementation of an
+  "admin-only link" is the dangerous one:
+
+  1. This page is PUBLIC. Anyone can load the URL. The URL is not the security
+     boundary and must never be treated as a secret — link sharing, browser
+     history and referrer headers all leak it.
+  2. The key below is the ANON key. It is published inside every copy of the
+     iOS app and is designed to be public. It grants nothing on its own.
+  3. Authority comes from signing in and from row-level security. Every query
+     runs as the signed-in user; a non-admin session sees an empty page because
+     the policies return nothing, not because the UI hid it.
+  4. There is NO service-role key here, and there must never be one. A
+     service-role key in a browser bypasses every policy and would hand the
+     whole database to anyone who viewed source.
+
+  What an admin can reach: the moderation queue and community content. Not
+  anybody's log, vials, photos or bloodwork — those policies are unchanged and
+  the privacy policy promises they stay that way.
+-->
+<style>
+:root{--bg:#0d1113;--card:#161b1e;--ink:#eef2f3;--muted:#98a3ab;--accent:#2ec4b0;
+--danger:#ef6b62;--warn:#e0a458;--ok:#3ecf8e;--line:#262e33}
+@media(prefers-color-scheme:light){:root{--bg:#f4f6f7;--card:#fff;--ink:#12181c;
+--muted:#5a6570;--accent:#12a594;--danger:#c4433a;--warn:#a3702a;--ok:#127a4e;--line:#e4e8ea}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+.wrap{max-width:900px;margin:0 auto;padding:24px 18px 80px}
+header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+h1{font-size:22px;margin:0}
+.brand{font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)}
+.sub{color:var(--muted);font-size:13px;margin:0 0 22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;margin-bottom:16px}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+input{width:100%;padding:11px 12px;border-radius:9px;border:1px solid var(--line);
+background:var(--bg);color:var(--ink);font-size:15px}
+button{padding:10px 14px;border-radius:9px;border:0;background:var(--accent);color:#fff;
+font-weight:600;font-size:14px;cursor:pointer}
+button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+button.danger{background:var(--danger)}
+button.warn{background:var(--warn)}
+button:disabled{opacity:.5;cursor:default}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+.stat{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:12px}
+.stat b{display:block;font-size:24px;line-height:1.1}
+.stat span{font-size:12px;color:var(--muted)}
+.pill{font-size:11px;font-weight:700;padding:2px 7px;border-radius:99px;background:var(--line);color:var(--muted)}
+.pill.urgent{background:var(--danger);color:#fff}
+.snap{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:10px;
+margin:8px 0;white-space:pre-wrap;font-size:14px}
+.muted{color:var(--muted);font-size:13px}
+.err{color:var(--danger);font-size:13px;margin-top:8px}
+.hide{display:none!important}
+hr{border:0;border-top:1px solid var(--line);margin:16px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="brand">MyPepTraX</span>
+    <h1>Control Center</h1>
+  </header>
+  <p class="sub" id="who">Sign in with an administrator account.</p>
+
+  <!-- Sign in -->
+  <section class="card" id="auth">
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="username" inputmode="email">
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <div class="row" style="margin-top:14px">
+      <button id="signin">Sign in</button>
+      <span class="muted">Access is granted by the database, not by this page.</span>
+    </div>
+    <div class="err hide" id="authErr"></div>
+  </section>
+
+  <!-- Console -->
+  <section id="console" class="hide">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>Overview</strong>
+        <div class="row">
+          <button class="ghost" id="refresh">Refresh</button>
+          <button class="ghost" id="signout">Sign out</button>
+        </div>
+      </div>
+      <div class="stats" style="margin-top:14px" id="stats"></div>
+    </div>
+
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <strong>Moderation queue</strong>
+        <label class="row muted" style="margin:0">
+          <input type="checkbox" id="showResolved" style="width:auto;margin-right:6px">
+          include resolved
+        </label>
+      </div>
+      <div id="reports" style="margin-top:12px"></div>
+    </div>
+
+    <p class="muted">
+      This console can reach the moderation queue and community content only.
+      It cannot read anyone's dose log, vials, photos or bloodwork — those
+      row-level security policies are unchanged, and the privacy policy says
+      there is no admin view of them.
+    </p>
+  </section>
+</div>
+
+<script type="module">
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const SUPABASE_URL = "https://kvseispfcfqvvgbdvfxm.supabase.co";
+// Public by design: this same key ships inside every copy of the iOS app.
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt2c2Vpc3BmY2ZxdnZnYmR2ZnhtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5NjEwNTUsImV4cCI6MjEwMDUzNzA1NX0.CIUtuRVHR9J-gu92kYSHlZE51vkFeyybJzVo2oK6Zik";
+
+const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = (id) => document.getElementById(id);
+
+const REASONS = {
+  human_use: "Describes taking it themselves",
+  dosing_advice: "Telling someone what to take",
+  sourcing: "Selling or sourcing",
+  medical_claim: "Unsupported medical claim",
+  harassment: "Harassment or abuse",
+  spam: "Spam",
+  minor: "Involves a minor",
+  other: "Something else",
+};
+const URGENT = new Set(["human_use", "minor"]);
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+async function isAdmin() {
+  const { data: { user } } = await db.auth.getUser();
+  if (!user) return false;
+  // Reads the caller's own row, which RLS already permits. The answer is
+  // advisory for the UI; the queries below are gated by policy regardless.
+  const { data } = await db.from("profiles").select("is_admin").eq("id", user.id).maybeSingle();
+  return data?.is_admin === true;
+}
+
+async function signIn() {
+  $("authErr").classList.add("hide");
+  $("signin").disabled = true;
+  const { error } = await db.auth.signInWithPassword({
+    email: $("email").value.trim(),
+    password: $("password").value,
+  });
+  $("signin").disabled = false;
+  if (error) return fail(error.message);
+  if (!(await isAdmin())) {
+    await db.auth.signOut();
+    return fail("That account is not an administrator.");
+  }
+  await enterConsole();
+}
+
+function fail(message) {
+  $("authErr").textContent = message;
+  $("authErr").classList.remove("hide");
+}
+
+async function enterConsole() {
+  const { data: { user } } = await db.auth.getUser();
+  $("who").textContent = `Signed in as ${user.email}.`;
+  $("auth").classList.add("hide");
+  $("console").classList.remove("hide");
+  await refresh();
+}
+
+async function refresh() {
+  await Promise.all([loadStats(), loadReports()]);
+}
+
+async function loadStats() {
+  const counts = async (table, filter) => {
+    let q = db.from(table).select("*", { count: "exact", head: true });
+    if (filter) q = filter(q);
+    const { count, error } = await q;
+    return error ? "—" : count;
+  };
+  const [posts, comments, open, members] = await Promise.all([
+    counts("community_posts"),
+    counts("community_comments"),
+    counts("community_reports", (q) => q.is("resolved_at", null)),
+    counts("community_profiles"),
+  ]);
+  $("stats").innerHTML = [
+    ["Open reports", open], ["Posts", posts], ["Replies", comments], ["Handles", members],
+  ].map(([label, value]) =>
+    `<div class="stat"><b>${esc(value)}</b><span>${esc(label)}</span></div>`
+  ).join("");
+}
+
+async function loadReports() {
+  let q = db.from("community_reports").select("*").order("created_at", { ascending: false }).limit(200);
+  if (!$("showResolved").checked) q = q.is("resolved_at", null);
+  const { data, error } = await q;
+  if (error) {
+    $("reports").innerHTML = `<p class="err">${esc(error.message)}</p>`;
+    return;
+  }
+  if (!data.length) {
+    $("reports").innerHTML = `<p class="muted">Nothing to review.</p>`;
+    return;
+  }
+  $("reports").innerHTML = data.map(renderReport).join("<hr>");
+  for (const report of data) {
+    for (const action of ["approved", "removed", "suspended"]) {
+      const el = document.getElementById(`${action}-${report.id}`);
+      if (el) el.onclick = () => resolve(report, action);
+    }
+  }
+}
+
+function renderReport(r) {
+  const reason = REASONS[r.reason] ?? r.reason;
+  const when = new Date(r.created_at).toLocaleString();
+  const target = r.post_id ? "post" : (r.comment_id ? "reply" : "deleted content");
+  const pill = URGENT.has(r.reason) ? "pill urgent" : "pill";
+  const done = r.resolved_at
+    ? `<p class="muted">Resolved: ${esc(r.resolution)} — ${new Date(r.resolved_at).toLocaleString()}</p>`
+    : `<div class="row">
+         <button id="approved-${r.id}">Approve and restore</button>
+         <button class="danger" id="removed-${r.id}">Deny and remove</button>
+         <button class="warn" id="suspended-${r.id}" ${r.target_author_id ? "" : "disabled"}>Remove and suspend</button>
+       </div>`;
+  return `
+    <div>
+      <div class="row" style="justify-content:space-between">
+        <span class="${pill}">${esc(reason)}</span>
+        <span class="muted">${esc(when)} · on a ${esc(target)}</span>
+      </div>
+      <div class="snap">${esc(r.content_snapshot || "No copy of the content was kept.")}</div>
+      ${r.detail ? `<p class="muted">Reporter added: ${esc(r.detail)}</p>` : ""}
+      ${done}
+    </div>`;
+}
+
+async function resolve(report, resolution) {
+  const label = { approved: "restore", removed: "remove", suspended: "remove and suspend the account" }[resolution];
+  if (!confirm(`Are you sure you want to ${label}?`)) return;
+
+  try {
+    if (resolution === "removed" || resolution === "suspended") {
+      if (report.post_id) await db.from("community_posts").delete().eq("id", report.post_id);
+      if (report.comment_id) await db.from("community_comments").delete().eq("id", report.comment_id);
+    }
+    if (resolution === "suspended" && report.target_author_id) {
+      await db.from("community_profiles").update({ is_suspended: true }).eq("id", report.target_author_id);
+    }
+    if (resolution === "approved") {
+      await db.rpc("community_set_review", {
+        target_post: report.post_id, target_comment: report.comment_id, reviewing: false,
+      });
+    }
+    const { data: { user } } = await db.auth.getUser();
+    // The stored value stays `dismissed` for an approval so rows written
+    // before the review queue existed still read back the same way.
+    const stored = resolution === "approved" ? "dismissed" : resolution;
+    const { error } = await db.from("community_reports")
+      .update({ resolved_at: new Date().toISOString(), resolved_by: user.id, resolution: stored })
+      .eq("id", report.id);
+    if (error) throw error;
+  } catch (e) {
+    alert(`That did not go through: ${e.message ?? e}`);
+  }
+  await refresh();
+}
+
+$("signin").onclick = signIn;
+$("password").addEventListener("keydown", (e) => { if (e.key === "Enter") signIn(); });
+$("refresh").onclick = refresh;
+$("showResolved").onchange = loadReports;
+$("signout").onclick = async () => { await db.auth.signOut(); location.reload(); };
+
+// A stored session means no second sign-in, but it is still checked against
+// is_admin: a demoted account must not keep a console it can no longer use.
+(async () => {
+  const { data: { session } } = await db.auth.getSession();
+  if (session && await isAdmin()) await enterConsole();
+})();
+</script>
+</body>
+</html>
